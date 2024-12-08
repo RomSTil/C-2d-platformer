@@ -3,15 +3,17 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <algorithm>
 
 // Константы
 const int WINDOW_WIDTH = 1520;
 const int WINDOW_HEIGHT = 900;
-const int TILE_SIZE = 80;  // Размер тайла (платформы)
+const int TILE_SIZE = 80;
 const float GRAVITY = 0.5f;
-const float JUMP_SPEED = -10.0f;
+const float JUMP_SPEED = -14.0f;
 const float MOVE_SPEED = 5.0f;
-const int MAX_HEALTH = 100;  // Максимальное здоровье игрока
+const int MAX_HEALTH = 100;
+const float ANIMATION_SPEED = 0.2f;  // Скорость смены кадров (0.2 секунды на кадр)
 
 // Функция загрузки уровня
 std::vector<std::string> loadLevelFromFile(const std::string& filename) {
@@ -28,118 +30,188 @@ std::vector<std::string> loadLevelFromFile(const std::string& filename) {
         level.push_back(line);
     }
 
-    file.close();
-
     if (level.empty()) {
         std::cerr << "Ошибка: файл пуст!\n";
         exit(1);
     }
-
     return level;
+}
+
+// Функция для обработки столкновений игрока с платформами
+void resolveCollision(sf::Sprite& player, sf::Vector2f& velocity, const sf::Sprite& platform, bool& isOnGround) {
+    sf::FloatRect playerBounds = player.getGlobalBounds();
+    sf::FloatRect platformBounds = platform.getGlobalBounds();
+
+    if (!playerBounds.intersects(platformBounds)) return;
+
+    float overlapLeft = playerBounds.left + playerBounds.width - platformBounds.left;
+    float overlapRight = platformBounds.left + platformBounds.width - playerBounds.left;
+    float overlapTop = playerBounds.top + playerBounds.height - platformBounds.top;
+    float overlapBottom = platformBounds.top + platformBounds.height - playerBounds.top;
+
+    float minOverlapX = std::min(overlapLeft, overlapRight);
+    float minOverlapY = std::min(overlapTop, overlapBottom);
+
+    if (minOverlapX < minOverlapY) {
+        // Горизонтальное столкновение
+        if (overlapLeft < overlapRight) {
+            player.setPosition(platformBounds.left - playerBounds.width, player.getPosition().y);
+        } else {
+            player.setPosition(platformBounds.left + platformBounds.width, player.getPosition().y);
+        }
+        velocity.x = 0;
+    } else {
+        // Вертикальное столкновение
+        if (overlapTop < overlapBottom) {
+            player.setPosition(player.getPosition().x, platformBounds.top - playerBounds.height);
+            velocity.y = 0;
+            isOnGround = true;
+        } else {
+            player.setPosition(player.getPosition().x, platformBounds.top + platformBounds.height);
+            velocity.y = 0;
+        }
+    }
+}
+
+// Функция для обновления анимации ходьбы
+void updateAnimation(sf::Sprite& player, sf::Vector2f velocity, float& animationTimer, int& currentFrame, sf::Texture& playerTexture1, sf::Texture& playerTexture2, sf::Texture& playerTexture3) {
+    if (velocity.x != 0) {
+        animationTimer += 1.0f / 60.0f;  // увеличиваем таймер на каждом кадре
+
+        if (animationTimer >= ANIMATION_SPEED) {
+            animationTimer = 0.0f;  // сбросим таймер
+
+            // Переключаем текстуру в зависимости от текущего кадра
+            if (currentFrame == 0) {
+                player.setTexture(playerTexture1);  // первый кадр
+                currentFrame = 1;
+            } else if (currentFrame == 1) {
+                player.setTexture(playerTexture2);  // второй кадр
+                currentFrame = 2;
+            } else {
+                player.setTexture(playerTexture3);  // третий кадр
+                currentFrame = 0;
+            }
+        }
+    } else {
+        player.setTexture(playerTexture1);  // Если игрок не двигается, показываем первый кадр
+    }
+}
+
+// Функция для обработки ввода
+void handleInput(sf::Sprite& player, sf::Vector2f& velocity, bool& isOnGround) {
+    velocity.x = 0.0f;
+
+    if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
+        velocity.x = -MOVE_SPEED;
+        player.setScale(-std::abs(player.getScale().x), player.getScale().y);  // инвертируем горизонтальный масштаб
+        player.setOrigin(player.getLocalBounds().width, 0); // Устанавливаем новую точку отсчета
+    }
+    if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
+        velocity.x = MOVE_SPEED;
+        player.setScale(std::abs(player.getScale().x), player.getScale().y);  // нормальный масштаб
+        player.setOrigin(0, 0); // Возвращаем точку отсчета к стандартной
+    }
+    if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space) && isOnGround) {
+        velocity.y = JUMP_SPEED;
+        isOnGround = false;
+    }
+}
+
+// Функция для применения гравитации
+void applyGravity(sf::Vector2f& velocity, bool isOnGround) {
+    if (!isOnGround) {
+        velocity.y += GRAVITY;
+    }
+}
+
+// Функция для обработки монет
+void handleCoins(sf::Sprite& player, std::vector<sf::Sprite>& coins, int& score) {
+    for (auto& coin : coins) {
+        if (player.getGlobalBounds().intersects(coin.getGlobalBounds())) {
+            score += 10;
+            coin.setPosition(-TILE_SIZE, -TILE_SIZE); // Убираем монету
+        }
+    }
+}
+
+// Функция для отрисовки элементов
+void render(sf::RenderWindow& window, const std::vector<sf::Sprite>& platforms, const std::vector<sf::Sprite>& coins, const sf::Sprite& player, const sf::Text& scoreText, const sf::Text& healthText) {
+    window.clear();
+    for (const auto& platform : platforms) {
+        window.draw(platform);
+    }
+    for (const auto& coin : coins) {
+        window.draw(coin);
+    }
+    window.draw(player);
+    window.draw(scoreText);
+    window.draw(healthText);
+    window.display();
 }
 
 int main() {
     sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2D Платформер");
     window.setFramerateLimit(60);
 
-    // Загрузка текстур
-    sf::Texture playerTexture;
-    if (!playerTexture.loadFromFile("player.png")) {
-        std::cerr << "Ошибка: не удалось загрузить текстуру для игрока!\n";
+    // Загрузка текстур для анимации
+    sf::Texture playerTexture1, playerTexture2, playerTexture3, platformTexture, coinTexture;
+    if (!playerTexture1.loadFromFile("1.png") ||
+        !playerTexture2.loadFromFile("3.png") ||
+        !playerTexture3.loadFromFile("5.png") ||
+        !platformTexture.loadFromFile("platform.png") ||
+        !coinTexture.loadFromFile("coin.png")) {
+        std::cerr << "Ошибка загрузки текстур!\n";
         return 1;
     }
 
-    sf::Texture platformTexture;
-    if (!platformTexture.loadFromFile("platform.png")) {
-        std::cerr << "Ошибка: не удалось загрузить текстуру для платформы!\n";
-        return 1;
-    }
-
-    sf::Texture coinTexture;
-    if (!coinTexture.loadFromFile("coin.png")) {
-        std::cerr << "Ошибка: не удалось загрузить текстуру для монеток!\n";
-        return 1;
-    }
-
-    // Вектор для хранения монеток
-    std::vector<sf::Sprite> coins;
+    // Игрок
+    sf::Sprite player(playerTexture1);
+    player.setScale(static_cast<float>(TILE_SIZE) / playerTexture1.getSize().x,
+                    static_cast<float>(TILE_SIZE) / playerTexture1.getSize().y);
+    sf::Vector2f velocity(0.0f, 0.0f);
+    bool isOnGround = false;
+    int health = MAX_HEALTH;
 
     // Загрузка уровня
     std::vector<std::string> level = loadLevelFromFile("level.txt");
 
-    // Проверка уровня
-    size_t rowLength = level[0].size();
-    for (const auto& row : level) {
-        if (row.size() != rowLength) {
-            std::cerr << "Ошибка: строки уровня имеют разную длину!\n";
-            return 1;
-        }
-    }
-
-    // Игрок
-    sf::Sprite player;
-    player.setTexture(playerTexture);
-    player.setScale(
-        static_cast<float>(TILE_SIZE) / playerTexture.getSize().x,
-        static_cast<float>(TILE_SIZE) / playerTexture.getSize().y); // Пропорциональный масштаб
-
-    // Установка начальной позиции игрока
-    sf::Vector2f playerStartPos;
-    bool playerPositionSet = false;
-
-    // Платформы
+    // Платформы и монеты
     std::vector<sf::Sprite> platforms;
+    std::vector<sf::Sprite> coins;
 
-    // Обработка уровня
+    // Парсинг уровня
     for (size_t y = 0; y < level.size(); ++y) {
         for (size_t x = 0; x < level[y].size(); ++x) {
             if (level[y][x] == '#') {
-                sf::Sprite platform;
-                platform.setTexture(platformTexture);
-                platform.setScale(
-                    static_cast<float>(TILE_SIZE) / platformTexture.getSize().x,
-                    static_cast<float>(TILE_SIZE) / platformTexture.getSize().y); // Пропорциональный масштаб
-                platform.setPosition(static_cast<float>(x) * TILE_SIZE, static_cast<float>(y) * TILE_SIZE); // Позиция с учетом TILE_SIZE
+                sf::Sprite platform(platformTexture);
+                platform.setScale(static_cast<float>(TILE_SIZE) / platformTexture.getSize().x,
+                                  static_cast<float>(TILE_SIZE) / platformTexture.getSize().y);
+                platform.setPosition(x * TILE_SIZE, y * TILE_SIZE);
                 platforms.push_back(platform);
-            } else if (level[y][x] == 'P' && !playerPositionSet) {
-                player.setPosition(static_cast<float>(x) * TILE_SIZE, static_cast<float>(y) * TILE_SIZE);
-                playerStartPos = {static_cast<float>(x) * TILE_SIZE, static_cast<float>(y) * TILE_SIZE};
-                playerPositionSet = true;
             } else if (level[y][x] == 'C') {
-                sf::Sprite coin;
-                coin.setTexture(coinTexture);
-                float scale = static_cast<float>(TILE_SIZE) / std::max(coinTexture.getSize().x, coinTexture.getSize().y);
-                coin.setScale(scale, scale);  // Устанавливаем нормальный масштаб
-                coin.setPosition(static_cast<float>(x) * TILE_SIZE, static_cast<float>(y) * TILE_SIZE); // Позиция с учетом TILE_SIZE
+                sf::Sprite coin(coinTexture);
+                coin.setScale(static_cast<float>(TILE_SIZE) / coinTexture.getSize().x,
+                              static_cast<float>(TILE_SIZE) / coinTexture.getSize().y);
+                coin.setPosition(x * TILE_SIZE, y * TILE_SIZE);
                 coins.push_back(coin);
-                // Вывод координат монеты для отладки
-                std::cout << "Coin at: " << coin.getPosition().x << ", " << coin.getPosition().y << std::endl;
+            } else if (level[y][x] == 'P') {
+                player.setPosition(x * TILE_SIZE, y * TILE_SIZE);
             }
         }
     }
 
-    if (!playerPositionSet) {
-        std::cerr << "Ошибка: в уровне не найден символ 'P' для позиции игрока!\n";
-        return 1;
-    }
+    // Счет
+    int score = 0;
 
-    // Создание текста
+    // Шрифт для текста
     sf::Font font;
     if (!font.loadFromFile("zeldadxt.ttf")) {
         std::cerr << "Ошибка: не удалось загрузить шрифт!\n";
         return 1;
     }
 
-    // Текст для отображения информации
-    sf::Text playerText;
-    playerText.setFont(font);
-    playerText.setString("Player");
-    playerText.setCharacterSize(20);
-    playerText.setFillColor(sf::Color::White);
-    playerText.setStyle(sf::Text::Bold);
-
-    // Счетчик очков
-    int score = 0;
+    // Текст для очков
     sf::Text scoreText;
     scoreText.setFont(font);
     scoreText.setCharacterSize(30);
@@ -147,121 +219,54 @@ int main() {
     scoreText.setStyle(sf::Text::Bold);
     scoreText.setPosition(20, 20);
 
-    // Игрок
-    int health = MAX_HEALTH;  // Начальное здоровье игрока
+    // Текст для здоровья
     sf::Text healthText;
     healthText.setFont(font);
-    healthText.setString("Health: " + std::to_string(health));
     healthText.setCharacterSize(30);
     healthText.setFillColor(sf::Color::White);
     healthText.setStyle(sf::Text::Bold);
     healthText.setPosition(20, 60);
 
-    // Переменные игрока
-    sf::Vector2f velocity(0.0f, 0.0f);
-    bool isOnGround = false;
+    // Таймер анимации и текущий кадр
+    float animationTimer = 0.0f;
+    int currentFrame = 0;
 
+    // Основной цикл
     while (window.isOpen()) {
-        // События
         sf::Event event;
         while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed)
+            if (event.type == sf::Event::Closed) {
                 window.close();
-        }
-
-        // Управление
-        velocity.x = 0.0f;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
-            velocity.x = -MOVE_SPEED;
-
-            // Отражаем спрайт влево
-            if (player.getScale().x > 0) {
-                player.setScale(-std::abs(player.getScale().x), player.getScale().y);
-                player.setOrigin(player.getLocalBounds().width, 0); // Устанавливаем новую точку отсчета
             }
         }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
-            velocity.x = MOVE_SPEED;
 
-            // Возвращаем спрайт в исходное положение
-            if (player.getScale().x < 0) {
-                player.setScale(std::abs(player.getScale().x), player.getScale().y);
-                player.setOrigin(0, 0); // Возвращаем точку отсчета к стандартной
-            }
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space) && isOnGround) {
-            velocity.y = JUMP_SPEED;
-            isOnGround = false;
-        }
+        // Обработка ввода
+        handleInput(player, velocity, isOnGround);
+
+        // Применение гравитации
+        applyGravity(velocity, isOnGround);
 
         // Перемещение игрока
         player.move(velocity);
 
-        // Ограничения экрана
-        if (player.getPosition().x < 0) player.setPosition(0, player.getPosition().y);
-        if (player.getPosition().x > WINDOW_WIDTH) player.setPosition(WINDOW_WIDTH, player.getPosition().y);
+        // Обновление анимации
+        updateAnimation(player, velocity, animationTimer, currentFrame, playerTexture1, playerTexture2, playerTexture3);
 
-        // Обработка вертикального движения
-        player.move(0.0f, velocity.y);
+        // Обработка столкновений с платформами
         isOnGround = false;
-
-        // Проходим по платформам для проверки коллизий
         for (const auto& platform : platforms) {
-            if (player.getGlobalBounds().intersects(platform.getGlobalBounds())) {
-                
-                // Коллизия с платформой по вертикали
-                if (velocity.y > 0) { // Падение
-                    float playerBottom = player.getPosition().y + player.getGlobalBounds().height;
-                    float platformTop = platform.getPosition().y;
-
-                    // Проверяем, находится ли игрок над платформой
-                    if (playerBottom > platformTop) {
-                        player.setPosition(player.getPosition().x, platformTop - player.getGlobalBounds().height);
-                        velocity.y = 0;
-                        isOnGround = true;
-                    }
-                } else if (velocity.y < 0) { // Прыжок вверх
-                    float playerTop = player.getPosition().y;
-                    float platformBottom = platform.getPosition().y + platform.getGlobalBounds().height;
-
-                    // Проверяем, находится ли игрок под платформой
-                    if (playerTop < platformBottom) {
-                        player.setPosition(player.getPosition().x, platformBottom);
-                        velocity.y = 0;
-                    }
-                }
-            }
+            resolveCollision(player, velocity, platform, isOnGround);
         }
 
-        // Если игрок не на земле, применяем гравитацию
-        if (!isOnGround) {
-            velocity.y += GRAVITY; // gravity - величина гравитации
-        }
+        // Обработка монет
+        handleCoins(player, coins, score);
 
-        // Проверка столкновений с монетами
-        for (auto& coin : coins) {
-            if (player.getGlobalBounds().intersects(coin.getGlobalBounds())) {
-                score += 10;
-                coin.setPosition(-TILE_SIZE, -TILE_SIZE); // Убираем монету после сбора
-            }
-        }
-
-        // Отображение информации
+        // Обновление текста
         scoreText.setString("Score: " + std::to_string(score));
         healthText.setString("Health: " + std::to_string(health));
 
-        // Отображение монет и объектов
-        window.clear();
-        for (const auto& platform : platforms) {
-            window.draw(platform);
-        }
-        for (const auto& coin : coins) {
-            window.draw(coin);
-        }
-        window.draw(player);
-        window.draw(scoreText);
-        window.draw(healthText);
-        window.display();
+        // Отрисовка элементов
+        render(window, platforms, coins, player, scoreText, healthText);
     }
 
     return 0;
